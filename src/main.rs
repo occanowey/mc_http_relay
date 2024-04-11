@@ -12,7 +12,7 @@ pub(crate) use hostname::Hostname;
 use clap::Parser;
 use color_eyre::{eyre::eyre, Result};
 use mcproto::{
-    net::handler_from_stream,
+    net::{handler_from_stream, state::StatusState},
     packet::handshaking::{Handshake, NextState},
 };
 use reqwest::Url;
@@ -75,9 +75,29 @@ fn handle_client(stream: TcpStream, destination_url: Url) -> Result<()> {
     info!(next_state = ?handshake.next_state, "Client connected");
 
     match handshake.next_state {
-        NextState::Status => todo!(),
+        NextState::Status => handle_status(handler.status(), destination_url, handshake),
         NextState::Login => todo!(),
 
         NextState::Unknown(other) => Err(eyre!("client requested unknown next state: {other}")),
     }
+}
+
+fn handle_status(
+    mut handler: NetworkHandler<StatusState>,
+    destination_url: Url,
+    handshake: Handshake,
+) -> Result<()> {
+    use mcproto::packet::status::{PingRequest, PingResponse, StatusRequest, StatusResponse};
+
+    handler.read::<StatusRequest>()?;
+    handler.write(StatusResponse {
+        response: "\"todo\"".to_string(),
+    })?;
+
+    let ping: PingRequest = handler.read()?;
+    handler.write(PingResponse {
+        payload: ping.payload,
+    })?;
+
+    Ok(handler.close()?)
 }
