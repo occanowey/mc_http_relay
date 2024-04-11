@@ -26,8 +26,8 @@ use tracing::{debug, info, info_span, trace, warn};
 use num_bigint::BigInt;
 use sha1::{Digest, Sha1};
 
-use reqwest::Url;
-use serde::Deserialize;
+use reqwest::{blocking::RequestBuilder, Url};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -37,6 +37,9 @@ struct Args {
 
     /// Url to forward status and login requests to
     destination_url: Url,
+
+    /// Bearer token to be send to the destination
+    bearer_token: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -47,10 +50,22 @@ fn main() -> Result<()> {
 
     let key_pair = Arc::new(encryption::McKeyPair::generate()?);
 
+    let client = reqwest::blocking::Client::new();
+    let request = client
+        .post(args.destination_url)
+        .header(reqwest::header::ACCEPT, "application/json");
+
+    let request = if let Some(token) = args.bearer_token {
+        request.bearer_auth(token)
+    } else {
+        request
+    };
+
     loop {
         let (stream, client_address) = listener.accept()?;
 
-        let destination_url = args.destination_url.clone();
+        // not body attached, unwrap is safe
+        let request = request.try_clone().unwrap();
         let key_pair = key_pair.clone();
 
         thread::Builder::new()
@@ -59,7 +74,7 @@ fn main() -> Result<()> {
                 let span = info_span!("client", address = %client_address);
                 let _enter = span.enter();
 
-                handle_client(stream, &key_pair, destination_url).unwrap();
+                handle_client(stream, &key_pair, request).unwrap();
             })?;
     }
 }
@@ -80,7 +95,7 @@ pub type NetworkHandler<S> = mcproto::net::NetworkHandler<mcproto::net::side::Se
 fn handle_client(
     stream: TcpStream,
     key_pair: &encryption::McKeyPair,
-    destination_url: Url,
+    request: RequestBuilder,
 ) -> Result<()> {
     use mcproto::packet::handshaking::NextState;
 
@@ -95,8 +110,8 @@ fn handle_client(
     info!(next_state = ?handshake.next_state, "Client connected");
 
     match handshake.next_state {
-        NextState::Status => handle_status(handler.status(), destination_url, handshake),
-        NextState::Login => handle_login(handler.login(), key_pair, destination_url, handshake),
+        NextState::Status => handle_status(handler.status(), request, handshake),
+        NextState::Login => handle_login(handler.login(), key_pair, request, handshake),
 
         NextState::Unknown(other) => Err(eyre!("client requested unknown next state: {other}")),
     }
@@ -104,15 +119,31 @@ fn handle_client(
 
 fn handle_status(
     mut handler: NetworkHandler<StatusState>,
-    destination_url: Url,
+    request: RequestBuilder,
     handshake: Handshake,
 ) -> Result<()> {
     use mcproto::packet::status::{PingRequest, PingResponse, StatusRequest, StatusResponse};
 
+    #[derive(Serialize)]
+    struct StatusData {
+        protocol_version: i32,
+        server_address: String,
+        server_port: u16,
+    }
+
+    let response = request
+        .query(&[("state", "status")])
+        .json(&StatusData {
+            protocol_version: handshake.protocol_version.0,
+            server_address: handshake.server_address,
+            server_port: handshake.server_port,
+        })
+        .send()?
+        .error_for_status()?
+        .text()?;
+
     handler.read::<StatusRequest>()?;
-    handler.write(StatusResponse {
-        response: "\"todo\"".to_string(),
-    })?;
+    handler.write(StatusResponse { response })?;
 
     let ping: PingRequest = handler.read()?;
     handler.write(PingResponse {
@@ -127,7 +158,7 @@ const MOJANG_HAS_JOINED_URL: &str = "https://sessionserver.mojang.com/session/mi
 fn handle_login(
     mut handler: NetworkHandler<LoginState>,
     key_pair: &encryption::McKeyPair,
-    destination_url: Url,
+    request: RequestBuilder,
     handshake: Handshake,
 ) -> Result<()> {
     use mcproto::packet::login::{Disconnect, LoginStart};
@@ -176,7 +207,28 @@ fn handle_login(
     let res = res.json::<HasJoinedResponse>()?;
     info!(username = %res.name, "client authenticated");
 
-    let response = "\"todo\"".to_string();
+    #[derive(Serialize)]
+    struct LoginData {
+        protocol_version: i32,
+        server_address: String,
+        server_port: u16,
+        username: String,
+        uuid: Uuid,
+    }
+
+    let response = request
+        .query(&[("state", "login")])
+        .json(&LoginData {
+            protocol_version: handshake.protocol_version.0,
+            server_address: handshake.server_address,
+            server_port: handshake.server_port,
+            username: res.name,
+            uuid: res.id,
+        })
+        .send()?
+        .error_for_status()?
+        .text()?;
+
     handler.write(Disconnect { reason: response })?;
 
     Ok(handler.close()?)
