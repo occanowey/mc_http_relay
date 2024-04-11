@@ -16,6 +16,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 
 # Minecraft related
+mcproto = { git = "https://github.com/occanowey/mcproto", version = "0.1.0" }
+
+rsa = "0.9.6"
+der = "0.7.9"
+rand = "0.8"
+sha-1 = "0.10.0"
+num-bigint = "0.4"
+
 hostname-validator = "1.1.1"
 
 # Http related
