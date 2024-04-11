@@ -1,6 +1,8 @@
-use super::Hostname;
-// use serde::{Deserialize, Serialize};
 use std::{fmt, net::ToSocketAddrs, num::IntErrorKind, str::FromStr};
+
+use super::Hostname;
+
+use serde::{Deserialize, Serialize};
 
 static DEFAULT_PORT_STR: &str = "25565";
 
@@ -58,15 +60,15 @@ impl ToSocketAddrs for ServerAddr {
     }
 }
 
-// impl Serialize for ServerAddr {
-//     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-//         serializer.serialize_str(&self.to_string())
-//     }
-// }
+impl Serialize for ServerAddr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
 
-// impl<'de> Deserialize<'de> for ServerAddr {
-//     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-//         let address = String::deserialize(deserializer)?;
-//         Self::from_str(&address).map_err(serde::de::Error::custom)
-//     }
-// }
+impl<'de> Deserialize<'de> for ServerAddr {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let address = String::deserialize(deserializer)?;
+        Self::from_str(&address).map_err(serde::de::Error::custom)
+    }
+}

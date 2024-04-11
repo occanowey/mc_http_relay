@@ -1,5 +1,6 @@
-// use serde::{Deserialize, Serialize};
 use std::{fmt, net::Ipv4Addr, str::FromStr};
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hostname(pub String);
@@ -31,15 +32,15 @@ impl PartialEq<&str> for Hostname {
     }
 }
 
-// impl Serialize for Hostname {
-//     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-//         serializer.serialize_str(&self.to_string())
-//     }
-// }
+impl Serialize for Hostname {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
 
-// impl<'de> Deserialize<'de> for Hostname {
-//     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-//         let hostname = String::deserialize(deserializer)?;
-//         Self::from_str(&hostname).map_err(serde::de::Error::custom)
-//     }
-// }
+impl<'de> Deserialize<'de> for Hostname {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let hostname = String::deserialize(deserializer)?;
+        Self::from_str(&hostname).map_err(serde::de::Error::custom)
+    }
+}
