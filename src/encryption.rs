@@ -73,13 +73,13 @@ pub(crate) fn negotiate_encryption(
     let encryption_res: EncryptionResponse = handler.read()?;
 
     // decrypt the verify the tunnel
-    let res_verify_token = key_pair.decrypt(&encryption_res.verify_token.0)?;
+    let res_verify_token = key_pair.decrypt(&encryption_res.verify_token)?;
     if verify_token != res_verify_token {
         return Err(EncryptionError::VerifyTokenMissmatch(verify_token, res_verify_token).into());
     }
 
     // decrypt shared secred used for future encryption
-    let shared_secret = key_pair.decrypt(&encryption_res.shared_secret.0)?;
+    let shared_secret = key_pair.decrypt(&encryption_res.shared_secret)?;
     if shared_secret.len() != 16 {
         return Err(EncryptionError::InvalidSharedSecret(shared_secret.len()).into());
     }

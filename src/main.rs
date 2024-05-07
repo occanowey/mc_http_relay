@@ -134,7 +134,7 @@ fn handle_status(
     let response = request
         .query(&[("state", "status")])
         .json(&StatusData {
-            protocol_version: handshake.protocol_version.0,
+            protocol_version: handshake.protocol_version,
             server_address: handshake.server_address,
             server_port: handshake.server_port,
         })
@@ -219,7 +219,7 @@ fn handle_login(
     let response = request
         .query(&[("state", "login")])
         .json(&LoginData {
-            protocol_version: handshake.protocol_version.0,
+            protocol_version: handshake.protocol_version,
             server_address: handshake.server_address,
             server_port: handshake.server_port,
             username: res.name,

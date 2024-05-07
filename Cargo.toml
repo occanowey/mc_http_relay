@@ -18,7 +18,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 
 # Minecraft related
-mcproto = { git = "https://github.com/occanowey/mcproto", version = "0.1.0" }
+mcproto = { git = "https://github.com/occanowey/mcproto", rev = "c1638bf" }
 uuid = { version = "1.8.0", features = ["serde"] }
 
 rsa = "0.9.6"
