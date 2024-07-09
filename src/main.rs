@@ -4,27 +4,25 @@ mod serveraddr;
 
 use std::{
     env,
-    net::{TcpListener, TcpStream},
+    net::{Shutdown, TcpListener, TcpStream},
     sync::Arc,
     thread,
 };
 
-use clap::Parser;
-pub(crate) use hostname::Hostname;
-use serveraddr::ServerAddr;
-
-use mcproto::net::{
-    handler_from_stream,
-    state::{LoginState, StatusState},
-};
-use mcproto::packet::handshaking::Handshake;
-use uuid::Uuid;
-
 use color_eyre::{eyre::eyre, Result};
-use tracing::{debug, info, info_span, trace, warn};
+use tracing::{debug, error, info, info_span, trace, warn};
 
+use clap::Parser;
+
+pub(crate) use mcproto::versions::latest as proto;
+use mcproto::{handshake::Handshake, role, sio};
+use proto::states::{LoginState, StatusState};
+
+pub(crate) use hostname::Hostname;
 use num_bigint::BigInt;
+use serveraddr::ServerAddr;
 use sha1::{Digest, Sha1};
+use uuid::Uuid;
 
 use reqwest::{blocking::RequestBuilder, Url};
 use serde::{Deserialize, Serialize};
@@ -74,7 +72,18 @@ fn main() -> Result<()> {
                 let span = info_span!("client", address = %client_address);
                 let _enter = span.enter();
 
-                handle_client(stream, &key_pair, request).unwrap();
+                match handle_client(stream, &key_pair, request) {
+                    Ok(_) => {}
+                    Err(err) => match err.downcast_ref::<mcproto::error::Error>() {
+                        Some(mcproto::error::Error::StreamShutdown) => {}
+                        Some(mcproto::error::Error::UnexpectedDisconect(err)) => {
+                            info!("Connection unexpectedly closed: {}", err.kind());
+                        }
+                        _other => {
+                            error!(%err, "Error while handling connection");
+                        }
+                    },
+                }
             })?;
     }
 }
@@ -90,39 +99,42 @@ fn setup() -> Result<Args> {
     Ok(Args::parse())
 }
 
-pub type NetworkHandler<S> = mcproto::net::NetworkHandler<mcproto::net::side::Server, S>;
+pub type Connection<S> = sio::StdIoConnection<role::Server, S>;
 
 fn handle_client(
     stream: TcpStream,
     key_pair: &encryption::McKeyPair,
     request: RequestBuilder,
 ) -> Result<()> {
-    use mcproto::packet::handshaking::NextState;
+    use mcproto::handshake::NextState;
 
     debug!("Connection accepted");
+    let mut conn = sio::accept_stdio_stream(stream)?;
 
-    stream.set_nodelay(true)?;
-    let mut handler: NetworkHandler<_> = handler_from_stream(stream)?;
-
-    let handshake: Handshake = handler.read()?;
+    let handshake: Handshake = conn.expect_next_packet()?;
     trace!(?handshake, "Recieved handshake packet");
 
     info!(next_state = ?handshake.next_state, "Client connected");
 
     match handshake.next_state {
-        NextState::Status => handle_status(handler.status(), request, handshake),
-        NextState::Login => handle_login(handler.login(), key_pair, request, handshake),
+        NextState::Status => handle_status(conn.next_state(), handshake, request),
+        NextState::Login => handle_login(conn.next_state(), handshake, key_pair, request),
+
+        NextState::Transfer => todo!(),
 
         NextState::Unknown(other) => Err(eyre!("client requested unknown next state: {other}")),
     }
 }
 
 fn handle_status(
-    mut handler: NetworkHandler<StatusState>,
-    request: RequestBuilder,
+    mut connection: Connection<StatusState>,
     handshake: Handshake,
+    request: RequestBuilder,
 ) -> Result<()> {
-    use mcproto::packet::status::{PingRequest, PingResponse, StatusRequest, StatusResponse};
+    use proto::packets::status::{
+        c2s::{PingRequest, StatusRequest},
+        s2c::{PingResponse, StatusResponse},
+    };
 
     #[derive(Serialize)]
     struct StatusData {
@@ -142,33 +154,39 @@ fn handle_status(
         .error_for_status()?
         .text()?;
 
-    handler.read::<StatusRequest>()?;
-    handler.write(StatusResponse { response })?;
+    let request: StatusRequest = connection.expect_next_packet()?;
+    trace!(?request, "Recieved status request packet");
+    connection.write_packet(StatusResponse { response })?;
+    info!("Forwarded status");
 
-    let ping: PingRequest = handler.read()?;
-    handler.write(PingResponse {
+    let ping: PingRequest = connection.expect_next_packet()?;
+    trace!(?ping, "Recieved ping request packet");
+    connection.write_packet(PingResponse {
         payload: ping.payload,
     })?;
+    trace!("Sent ping response packet");
 
-    Ok(handler.close()?)
+    connection.shutdown(Shutdown::Both)?;
+    Ok(())
 }
 
 const MOJANG_HAS_JOINED_URL: &str = "https://sessionserver.mojang.com/session/minecraft/hasJoined";
 
 fn handle_login(
-    mut handler: NetworkHandler<LoginState>,
+    mut connection: Connection<LoginState>,
+    handshake: Handshake,
     key_pair: &encryption::McKeyPair,
     request: RequestBuilder,
-    handshake: Handshake,
 ) -> Result<()> {
-    use mcproto::packet::login::{Disconnect, LoginStart};
+    use proto::packets::login::{c2s::LoginStart, s2c::Disconnect};
 
-    let login_start: LoginStart = handler.read()?;
+    let login_start: LoginStart = connection.expect_next_packet()?;
+    trace!(?login_start, "Recieved login start packet");
 
     // technically the client part of the authentication is done in the middle
     // of encryption negotiations but this includes from the EncryptionRequest packet
     // to actually enabling encryption and the server auth comes after.
-    let shared_secret = encryption::negotiate_encryption(key_pair, &mut handler)?;
+    let shared_secret = encryption::negotiate_encryption(key_pair, &mut connection)?;
 
     // generate the server hash
     let mut hasher = Sha1::new();
@@ -194,7 +212,8 @@ fn handle_login(
 
         // maybe reply with something, look at what the offical server does?
         // but also maybe not
-        return Ok(handler.close()?);
+        connection.shutdown(Shutdown::Both)?;
+        return Ok(());
     }
 
     #[derive(Debug, Deserialize)]
@@ -229,7 +248,9 @@ fn handle_login(
         .error_for_status()?
         .text()?;
 
-    handler.write(Disconnect { reason: response })?;
+    connection.write_packet(Disconnect { reason: response })?;
+    trace!("Sent disconnect packet");
 
-    Ok(handler.close()?)
+    connection.shutdown(Shutdown::Both)?;
+    Ok(())
 }

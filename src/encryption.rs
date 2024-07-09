@@ -1,9 +1,9 @@
 use color_eyre::Result;
 use thiserror::Error;
 
-use mcproto::{
-    net::state::LoginState,
-    packet::login::{EncryptionRequest, EncryptionResponse},
+use super::proto::{
+    packets::login::{c2s::EncryptionResponse, s2c::EncryptionRequest},
+    states::LoginState,
 };
 
 use rand::{rngs::OsRng, Rng};
@@ -11,8 +11,9 @@ use rsa::{
     pkcs8::{Document, EncodePublicKey},
     Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
 };
+use tracing::trace;
 
-use super::NetworkHandler;
+use super::Connection;
 
 #[derive(Debug, Error)]
 pub(crate) enum EncryptionError {
@@ -54,23 +55,26 @@ impl McKeyPair {
 
 pub(crate) fn negotiate_encryption(
     key_pair: &McKeyPair,
-    handler: &mut NetworkHandler<LoginState>,
+    conn: &mut Connection<LoginState>,
 ) -> Result<Vec<u8>> {
     // generate 4 random bytes
     let mut verify_token = vec![0u8; 4];
     OsRng.fill(&mut verify_token[..]);
 
     // tell client to begin encryption
-    handler.write(EncryptionRequest {
+    conn.write_packet(EncryptionRequest {
         server_id: "".into(),
-        public_key: key_pair.public_key_der().as_ref().into(),
-        verify_token: verify_token.clone().into(),
+        public_key: key_pair.public_key_der().clone().into_vec(),
+        verify_token: verify_token.clone(),
+        should_authenticate: true,
     })?;
+    trace!("Sent encryption request packet");
 
     // client should authenticate with mojang
 
     // client is ready to enable encryption and will after this packet
-    let encryption_res: EncryptionResponse = handler.read()?;
+    let encryption_res: EncryptionResponse = conn.expect_next_packet()?;
+    trace!(?encryption_res, "Recieved encryption response packet");
 
     // decrypt the verify the tunnel
     let res_verify_token = key_pair.decrypt(&encryption_res.verify_token)?;
@@ -85,7 +89,7 @@ pub(crate) fn negotiate_encryption(
     }
 
     // enable encryption
-    handler.set_encryption_secret(&shared_secret);
+    conn.set_encryption_secret(&shared_secret);
 
     Ok(shared_secret)
 }
