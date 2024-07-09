@@ -1,17 +1,14 @@
 use color_eyre::Result;
 use thiserror::Error;
 
-use super::proto::{
-    packets::login::{c2s::EncryptionResponse, s2c::EncryptionRequest},
-    states::LoginState,
-};
-
 use rand::{rngs::OsRng, Rng};
 use rsa::{
     pkcs8::{Document, EncodePublicKey},
     Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
 };
 use tracing::trace;
+
+use crate::multi_version::{self, Protocol};
 
 use super::Connection;
 
@@ -53,27 +50,37 @@ impl McKeyPair {
     }
 }
 
-pub(crate) fn negotiate_encryption(
+pub(crate) fn negotiate_encryption<P: Protocol>(
     key_pair: &McKeyPair,
-    conn: &mut Connection<LoginState>,
-) -> Result<Vec<u8>> {
+    connection: &mut Connection<P::LoginState>,
+) -> Result<Vec<u8>>
+where
+    P::StatusState: multi_version::StatusState,
+    <P::StatusState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+    P::LoginState: multi_version::LoginState,
+    <P::LoginState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+{
     // generate 4 random bytes
     let mut verify_token = vec![0u8; 4];
     OsRng.fill(&mut verify_token[..]);
 
     // tell client to begin encryption
-    conn.write_packet(EncryptionRequest {
-        server_id: "".into(),
-        public_key: key_pair.public_key_der().clone().into_vec(),
-        verify_token: verify_token.clone(),
-        should_authenticate: true,
-    })?;
+    P::write_encryption_request(
+        connection,
+        multi_version::EncryptionRequest {
+            server_id: "".into(),
+            public_key: key_pair.public_key_der().clone().into_vec(),
+            verify_token: verify_token.clone(),
+        },
+    )?;
     trace!("Sent encryption request packet");
 
     // client should authenticate with mojang
 
     // client is ready to enable encryption and will after this packet
-    let encryption_res: EncryptionResponse = conn.expect_next_packet()?;
+    let encryption_res = P::read_encryption_response(connection)?;
     trace!(?encryption_res, "Recieved encryption response packet");
 
     // decrypt the verify the tunnel
@@ -89,7 +96,7 @@ pub(crate) fn negotiate_encryption(
     }
 
     // enable encryption
-    conn.set_encryption_secret(&shared_secret);
+    connection.set_encryption_secret(&shared_secret);
 
     Ok(shared_secret)
 }

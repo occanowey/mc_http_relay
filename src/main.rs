@@ -1,7 +1,9 @@
-mod encryption;
-mod hostname;
-mod serveraddr;
+use color_eyre::{eyre::eyre, Result};
+use tracing::{debug, error, info, info_span, trace, warn};
 
+use clap::Parser;
+use reqwest::{blocking::RequestBuilder, Url};
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     net::{Shutdown, TcpListener, TcpStream},
@@ -9,23 +11,22 @@ use std::{
     thread,
 };
 
-use color_eyre::{eyre::eyre, Result};
-use tracing::{debug, error, info, info_span, trace, warn};
-
-use clap::Parser;
-
-pub(crate) use mcproto::versions::latest as proto;
-use mcproto::{handshake::Handshake, role, sio};
-use proto::states::{LoginState, StatusState};
+use mcproto::handshake::{Handshake, HandshakingState};
+use mcproto::{role, sio};
 
 pub(crate) use hostname::Hostname;
-use num_bigint::BigInt;
+use multi_version::Protocol;
 use serveraddr::ServerAddr;
+
+use num_bigint::BigInt;
 use sha1::{Digest, Sha1};
 use uuid::Uuid;
 
-use reqwest::{blocking::RequestBuilder, Url};
-use serde::{Deserialize, Serialize};
+mod encryption;
+mod hostname;
+mod multi_version;
+mod serveraddr;
+mod version_impls;
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -72,7 +73,7 @@ fn main() -> Result<()> {
                 let span = info_span!("client", address = %client_address);
                 let _enter = span.enter();
 
-                match handle_client(stream, &key_pair, request) {
+                match handshake_client(stream, &key_pair, request) {
                     Ok(_) => {}
                     Err(err) => match err.downcast_ref::<mcproto::error::Error>() {
                         Some(mcproto::error::Error::StreamShutdown) => {}
@@ -101,13 +102,11 @@ fn setup() -> Result<Args> {
 
 pub type Connection<S> = sio::StdIoConnection<role::Server, S>;
 
-fn handle_client(
+fn handshake_client(
     stream: TcpStream,
     key_pair: &encryption::McKeyPair,
     request: RequestBuilder,
 ) -> Result<()> {
-    use mcproto::handshake::NextState;
-
     debug!("Connection accepted");
     let mut conn = sio::accept_stdio_stream(stream)?;
 
@@ -116,26 +115,163 @@ fn handle_client(
 
     info!(next_state = ?handshake.next_state, "Client connected");
 
-    match handshake.next_state {
-        NextState::Status => handle_status(conn.next_state(), handshake, request),
-        NextState::Login => handle_login(conn.next_state(), handshake, key_pair, request),
+    match handshake.protocol_version {
+        // 3 => handle_client::<version_impls::ProtocolV3>(conn, handshake, key_pair, request),
+        4 => handle_client::<version_impls::ProtocolV4>(conn, handshake, key_pair, request),
+        5 => handle_client::<version_impls::ProtocolV5>(conn, handshake, key_pair, request),
+        47 => handle_client::<version_impls::ProtocolV47>(conn, handshake, key_pair, request),
+        107 => handle_client::<version_impls::ProtocolV107>(conn, handshake, key_pair, request),
+        108 => handle_client::<version_impls::ProtocolV108>(conn, handshake, key_pair, request),
+        109 => handle_client::<version_impls::ProtocolV109>(conn, handshake, key_pair, request),
+        110 => handle_client::<version_impls::ProtocolV110>(conn, handshake, key_pair, request),
+        210 => handle_client::<version_impls::ProtocolV210>(conn, handshake, key_pair, request),
+        315 => handle_client::<version_impls::ProtocolV315>(conn, handshake, key_pair, request),
+        316 => handle_client::<version_impls::ProtocolV316>(conn, handshake, key_pair, request),
+        335 => handle_client::<version_impls::ProtocolV335>(conn, handshake, key_pair, request),
+        338 => handle_client::<version_impls::ProtocolV338>(conn, handshake, key_pair, request),
+        340 => handle_client::<version_impls::ProtocolV340>(conn, handshake, key_pair, request),
+        393 => handle_client::<version_impls::ProtocolV393>(conn, handshake, key_pair, request),
+        401 => handle_client::<version_impls::ProtocolV401>(conn, handshake, key_pair, request),
+        404 => handle_client::<version_impls::ProtocolV404>(conn, handshake, key_pair, request),
+        477 => handle_client::<version_impls::ProtocolV477>(conn, handshake, key_pair, request),
+        480 => handle_client::<version_impls::ProtocolV480>(conn, handshake, key_pair, request),
+        485 => handle_client::<version_impls::ProtocolV485>(conn, handshake, key_pair, request),
+        490 => handle_client::<version_impls::ProtocolV490>(conn, handshake, key_pair, request),
+        498 => handle_client::<version_impls::ProtocolV498>(conn, handshake, key_pair, request),
+        573 => handle_client::<version_impls::ProtocolV573>(conn, handshake, key_pair, request),
+        575 => handle_client::<version_impls::ProtocolV575>(conn, handshake, key_pair, request),
+        578 => handle_client::<version_impls::ProtocolV578>(conn, handshake, key_pair, request),
+        735 => handle_client::<version_impls::ProtocolV735>(conn, handshake, key_pair, request),
+        736 => handle_client::<version_impls::ProtocolV736>(conn, handshake, key_pair, request),
+        751 => handle_client::<version_impls::ProtocolV751>(conn, handshake, key_pair, request),
+        753 => handle_client::<version_impls::ProtocolV753>(conn, handshake, key_pair, request),
+        754 => handle_client::<version_impls::ProtocolV754>(conn, handshake, key_pair, request),
+        755 => handle_client::<version_impls::ProtocolV755>(conn, handshake, key_pair, request),
+        756 => handle_client::<version_impls::ProtocolV756>(conn, handshake, key_pair, request),
+        757 => handle_client::<version_impls::ProtocolV757>(conn, handshake, key_pair, request),
+        758 => handle_client::<version_impls::ProtocolV758>(conn, handshake, key_pair, request),
+        // 1.19 has weird authentication/encryption, cba
+        // 759 => handle_client::<version_impls::ProtocolV759>(conn, handshake, key_pair, request),
+        760 => handle_client::<version_impls::ProtocolV760>(conn, handshake, key_pair, request),
+        761 => handle_client::<version_impls::ProtocolV761>(conn, handshake, key_pair, request),
+        762 => handle_client::<version_impls::ProtocolV762>(conn, handshake, key_pair, request),
+        763 => handle_client::<version_impls::ProtocolV763>(conn, handshake, key_pair, request),
+        764 => handle_client::<version_impls::ProtocolV764>(conn, handshake, key_pair, request),
+        765 => handle_client::<version_impls::ProtocolV765>(conn, handshake, key_pair, request),
+        766 => handle_client::<version_impls::ProtocolV766>(conn, handshake, key_pair, request),
+        767 => handle_client::<version_impls::ProtocolV767>(conn, handshake, key_pair, request),
 
+        other => {
+            warn!("unknown protocol version: {}, rejecting.", other);
+            handle_unknown_client_version::<version_impls::ProtocolV767>(conn, handshake)
+        }
+    }
+}
+
+fn handle_unknown_client_version<P: Protocol>(
+    connection: Connection<HandshakingState>,
+    handshake: Handshake,
+) -> Result<()>
+where
+    P::StatusState: multi_version::StatusState,
+    <P::StatusState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+    P::LoginState: multi_version::LoginState,
+    <P::LoginState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+{
+    use mcproto::handshake::NextState;
+
+    match handshake.next_state {
+        NextState::Status => {
+            let mut connection = connection.next_state();
+
+            P::write_status_response(
+                &mut connection,
+                multi_version::StatusResponse {
+                    response: r#"{{
+                        "version": {{
+                            "name": "",
+                            "protocol": -1
+                        }},
+                        "players": {{
+                            "max": 0,
+                            "online": 0
+                        }},
+                        "description": {{
+                            "text": "Your Minecraft version is unsupported."
+                        }}
+                    }}"#
+                    .into(),
+                },
+            )?;
+            connection.shutdown(Shutdown::Both)?;
+
+            Ok(())
+        }
+        NextState::Login => {
+            let mut connection = connection.next_state();
+
+            P::write_disconnect(
+                &mut connection,
+                multi_version::Disconnect {
+                    reason: "\"Your Minecraft version is unsupported.\"".into(),
+                },
+            )?;
+            connection.shutdown(Shutdown::Both)?;
+
+            Ok(())
+        }
+
+        // not yet clear on what this does
         NextState::Transfer => todo!(),
 
         NextState::Unknown(other) => Err(eyre!("client requested unknown next state: {other}")),
     }
 }
 
-fn handle_status(
-    mut connection: Connection<StatusState>,
+fn handle_client<P: Protocol>(
+    connection: Connection<HandshakingState>,
+    handshake: Handshake,
+    key_pair: &encryption::McKeyPair,
+    request: RequestBuilder,
+) -> Result<()>
+where
+    P::StatusState: multi_version::StatusState,
+    <P::StatusState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+    P::LoginState: multi_version::LoginState,
+    <P::LoginState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+{
+    use mcproto::handshake::NextState;
+
+    match handshake.next_state {
+        NextState::Status => handle_status::<P>(connection.next_state(), handshake, request),
+        NextState::Login => {
+            handle_login::<P>(connection.next_state(), handshake, key_pair, request)
+        }
+
+        // not yet clear on what this does
+        NextState::Transfer => todo!(),
+
+        NextState::Unknown(other) => Err(eyre!("client requested unknown next state: {other}")),
+    }
+}
+
+fn handle_status<P: Protocol>(
+    mut connection: Connection<P::StatusState>,
     handshake: Handshake,
     request: RequestBuilder,
-) -> Result<()> {
-    use proto::packets::status::{
-        c2s::{PingRequest, StatusRequest},
-        s2c::{PingResponse, StatusResponse},
-    };
-
+) -> Result<()>
+where
+    P::StatusState: multi_version::StatusState,
+    <P::StatusState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+    P::LoginState: multi_version::LoginState,
+    <P::LoginState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+{
     #[derive(Serialize)]
     struct StatusData {
         protocol_version: i32,
@@ -154,39 +290,47 @@ fn handle_status(
         .error_for_status()?
         .text()?;
 
-    let request: StatusRequest = connection.expect_next_packet()?;
+    let request = P::read_status_request(&mut connection)?;
     trace!(?request, "Recieved status request packet");
-    connection.write_packet(StatusResponse { response })?;
+    P::write_status_response(&mut connection, multi_version::StatusResponse { response })?;
     info!("Forwarded status");
 
-    let ping: PingRequest = connection.expect_next_packet()?;
+    let ping = P::read_ping_request(&mut connection)?;
     trace!(?ping, "Recieved ping request packet");
-    connection.write_packet(PingResponse {
-        payload: ping.payload,
-    })?;
+    P::write_ping_response(
+        &mut connection,
+        multi_version::PingResponse {
+            payload: ping.payload,
+        },
+    )?;
     trace!("Sent ping response packet");
 
-    connection.shutdown(Shutdown::Both)?;
-    Ok(())
+    Ok(connection.shutdown(Shutdown::Both)?)
 }
 
 const MOJANG_HAS_JOINED_URL: &str = "https://sessionserver.mojang.com/session/minecraft/hasJoined";
 
-fn handle_login(
-    mut connection: Connection<LoginState>,
+fn handle_login<P: Protocol>(
+    mut connection: Connection<P::LoginState>,
     handshake: Handshake,
     key_pair: &encryption::McKeyPair,
     request: RequestBuilder,
-) -> Result<()> {
-    use proto::packets::login::{c2s::LoginStart, s2c::Disconnect};
-
-    let login_start: LoginStart = connection.expect_next_packet()?;
+) -> Result<()>
+where
+    P::StatusState: multi_version::StatusState,
+    <P::StatusState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+    P::LoginState: multi_version::LoginState,
+    <P::LoginState as mcproto::state::RoleStatePackets<mcproto::role::Server>>::RecvPacket:
+        mcproto::packet::PacketFromIdBody,
+{
+    let login_start = P::read_login_start(&mut connection)?;
     trace!(?login_start, "Recieved login start packet");
 
     // technically the client part of the authentication is done in the middle
     // of encryption negotiations but this includes from the EncryptionRequest packet
     // to actually enabling encryption and the server auth comes after.
-    let shared_secret = encryption::negotiate_encryption(key_pair, &mut connection)?;
+    let shared_secret = encryption::negotiate_encryption::<P>(key_pair, &mut connection)?;
 
     // generate the server hash
     let mut hasher = Sha1::new();
@@ -212,8 +356,7 @@ fn handle_login(
 
         // maybe reply with something, look at what the offical server does?
         // but also maybe not
-        connection.shutdown(Shutdown::Both)?;
-        return Ok(());
+        return Ok(connection.shutdown(Shutdown::Both)?);
     }
 
     #[derive(Debug, Deserialize)]
@@ -248,9 +391,11 @@ fn handle_login(
         .error_for_status()?
         .text()?;
 
-    connection.write_packet(Disconnect { reason: response })?;
+    P::write_disconnect(
+        &mut connection,
+        multi_version::Disconnect { reason: response },
+    )?;
     trace!("Sent disconnect packet");
 
-    connection.shutdown(Shutdown::Both)?;
-    Ok(())
+    Ok(connection.shutdown(Shutdown::Both)?)
 }
