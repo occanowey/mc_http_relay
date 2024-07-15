@@ -6,7 +6,7 @@ authors = ["occanowey"]
 description = "Relay Minecraft status and login requests to a http server."
 
 [dependencies]
-clap = { version = "4.5.4", features = ["derive"] }
+clap = { version = "4.5.4", features = ["derive", "env"] }
 hostname-validator = "1.1.1"
 
 # Error Handling

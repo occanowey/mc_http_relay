@@ -32,12 +32,15 @@ mod version_impls;
 #[command(version, about)]
 struct Args {
     /// Address the Minecraft server should bind to
+    #[arg(env)]
     server_address: ServerAddr,
 
     /// Url to forward status and login requests to
+    #[arg(env)]
     destination_url: Url,
 
     /// Bearer token to be send to the destination
+    #[arg(env)]
     bearer_token: Option<String>,
 }
 
